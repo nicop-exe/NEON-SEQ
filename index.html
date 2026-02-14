@@ -44,86 +44,98 @@
                     <span id="swingValue" class="value-display">0%</span>
                 </div>
             </div>
+            <button id="midiLearnBtn" class="midi-learn-btn" title="Activar mapeo MIDI">MIDI LEARN</button>
             <div class="step-display">
                 <span>STEP</span>
                 <span id="currentStep" class="step-number">--</span>
             </div>
         </header>
 
-        <!-- Sequencer Grid -->
-        <section class="sequencer">
-            <div class="step-indicators" id="stepIndicators"></div>
-            <div id="tracks" class="tracks"></div>
-            <button id="addTrackBtn" class="add-track-btn" title="Agregar track">
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
-                    <line x1="12" y1="5" x2="12" y2="19" />
-                    <line x1="5" y1="12" x2="19" y2="12" />
-                </svg>
-                <span>AGREGAR TRACK</span>
-            </button>
-        </section>
+        <!-- Main Layout: Split View -->
+        <div class="main-layout">
+            <!-- Left Panel: Sequencer, Toolbar, Sample Pool -->
+            <div class="left-panel">
+                <section class="sequencer-container">
+                    <div class="sequencer-scroll">
+                        <div class="step-indicators" id="stepIndicators"></div>
+                        <div id="tracks" class="tracks"></div>
+                    </div>
+                    <button id="addTrackBtn" class="add-track-btn" title="Agregar track">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <line x1="12" y1="5" x2="12" y2="19" />
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
+                        <span>AGREGAR TRACK</span>
+                    </button>
+                </section>
 
-        <!-- Toolbar -->
-        <section class="toolbar">
-            <button id="recordBtn" class="toolbar-btn record-btn" title="Grabar audio">
-                <svg viewBox="0 0 24 24" width="16" height="16">
-                    <circle cx="12" cy="12" r="7" fill="currentColor" />
-                </svg>
-                <span>REC</span>
-            </button>
-            <button id="exportAudioBtn" class="toolbar-btn" title="Exportar audio grabado" disabled>
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <polyline points="7 10 12 15 17 10" />
-                    <line x1="12" y1="15" x2="12" y2="3" />
-                </svg>
-                <span>AUDIO</span>
-            </button>
-            <div class="toolbar-divider"></div>
-            <button id="saveBtn" class="toolbar-btn" title="Guardar patrón como JSON">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
-                    <polyline points="17 21 17 13 7 13 7 21" />
-                    <polyline points="7 3 7 8 15 8" />
-                </svg>
-                <span>SAVE</span>
-            </button>
-            <button id="loadBtn" class="toolbar-btn" title="Cargar patrón desde JSON">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                </svg>
-                <span>LOAD</span>
-            </button>
-            <input type="file" id="loadJsonInput" accept=".json" style="display:none">
-            <div class="toolbar-divider"></div>
-            <button id="loadPoolBtn" class="toolbar-btn" title="Cargar carpeta de samples al pool">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                    <line x1="12" y1="11" x2="12" y2="17" />
-                    <line x1="9" y1="14" x2="15" y2="14" />
-                </svg>
-                <span>SAMPLE POOL</span>
-            </button>
-            <input type="file" id="poolFolderInput" multiple accept="audio/*" style="display:none" webkitdirectory>
-        </section>
+                <section class="toolbar">
+                    <button id="recordBtn" class="toolbar-btn record-btn" title="Grabar audio">
+                        <svg viewBox="0 0 24 24" width="16" height="16">
+                            <circle cx="12" cy="12" r="7" fill="currentColor" />
+                        </svg>
+                        <span>REC</span>
+                    </button>
+                    <button id="exportAudioBtn" class="toolbar-btn" title="Exportar audio grabado" disabled>
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                            <polyline points="7 10 12 15 17 10" />
+                            <line x1="12" y1="15" x2="12" y2="3" />
+                        </svg>
+                        <span>AUDIO</span>
+                    </button>
+                    <div class="toolbar-divider"></div>
+                    <button id="saveBtn" class="toolbar-btn" title="Guardar patrón como JSON">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path d="M19 21H5a2 2 0 0 1-2 2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+                            <polyline points="17 21 17 13 7 13 7 21" />
+                            <polyline points="7 3 7 8 15 8" />
+                        </svg>
+                        <span>SAVE</span>
+                    </button>
+                    <button id="loadBtn" class="toolbar-btn" title="Cargar patrón desde JSON">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                        </svg>
+                        <span>LOAD</span>
+                    </button>
+                    <input type="file" id="loadJsonInput" accept=".json" style="display:none">
+                    <div class="toolbar-divider"></div>
+                    <button id="loadPoolBtn" class="toolbar-btn" title="Cargar carpeta de samples al pool">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                            <line x1="12" y1="11" x2="12" y2="17" />
+                            <line x1="9" y1="14" x2="15" y2="14" />
+                        </svg>
+                        <span>SAMPLE POOL</span>
+                    </button>
+                    <input type="file" id="poolFolderInput" multiple accept="audio/*" style="display:none"
+                        webkitdirectory>
+                </section>
 
-        <!-- Sample Pool Panel -->
-        <section id="samplePoolSection" class="sample-pool-section hidden">
-            <div class="sample-pool-header">
-                <h2 class="section-title">SAMPLE <span class="accent">POOL</span></h2>
-                <span id="poolCount" class="pool-count">0 samples</span>
-                <button id="closePoolBtn" class="pool-close-btn" title="Cerrar pool">✕</button>
+                <section id="samplePoolSection" class="sample-pool-section hidden">
+                    <div class="sample-pool-header">
+                        <h2 class="section-title">SAMPLE <span class="accent">POOL</span></h2>
+                        <span id="poolCount" class="pool-count">0 samples</span>
+                        <button id="closePoolBtn" class="pool-close-btn" title="Cerrar pool">✕</button>
+                    </div>
+                    <div id="samplePoolGrid" class="sample-pool-grid"></div>
+                </section>
             </div>
-            <div id="samplePoolGrid" class="sample-pool-grid">
-                <!-- Sample items generated by JS -->
-            </div>
-        </section>
 
-        <!-- Effects Panel -->
-        <section class="effects-panel">
-            <h2 class="section-title">EFFECTS <span class="accent">RACK</span></h2>
-            <div id="effectsContainer" class="effects-container"></div>
-        </section>
+            <!-- Right Panel: Effects Rack -->
+            <div class="right-panel">
+                <section class="effects-panel">
+                    <h2 class="section-title">EFFECTS <span class="accent">RACK</span></h2>
+                    <div id="effectsContainer" class="effects-container"></div>
+                </section>
+            </div>
+        </div>
 
         <!-- Key Assign Modal -->
         <div id="keyAssignModal" class="modal-overlay hidden">
