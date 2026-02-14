@@ -222,14 +222,16 @@ body {
 }
 
 .bpm-control,
-.swing-control {
+.swing-control,
+.steps-control {
     display: flex;
     flex-direction: column;
     gap: 2px;
 }
 
 .bpm-control label,
-.swing-control label {
+.swing-control label,
+.steps-control label {
     font-family: var(--font-display);
     font-size: 0.55rem;
     font-weight: 700;
@@ -243,6 +245,28 @@ body {
     color: var(--text-secondary);
     text-align: right;
     width: 32px;
+}
+
+.selector {
+    background: transparent;
+    border: none;
+    color: var(--neon-blue);
+    font-family: var(--font-display);
+    font-size: 0.8rem;
+    font-weight: 700;
+    cursor: pointer;
+    outline: none;
+    text-align: right;
+    appearance: none;
+    -webkit-appearance: none;
+    min-width: 40px;
+    padding: 0;
+    margin: 0;
+}
+
+.selector option {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
 }
 
 .step-display {

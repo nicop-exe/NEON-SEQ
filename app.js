@@ -7,7 +7,7 @@
     'use strict';
 
     // ── Constants ──────────────────────────────────────
-    const NUM_STEPS = 64; // Updated to 64 steps
+    let NUM_STEPS = 64; // Dynamic
     const INITIAL_TRACKS = 4;
     const TRACK_COLOR_PALETTE = [
         { hex: '#00d4ff', rgb: '0,212,255' },
@@ -24,13 +24,13 @@
     let numTracks = 0;
     const grid = [];          // grid[t][s] = bool
     const muteState = [];
-    const keyBindings = [];   // assigned key per track
     const sampleNames = [];   // stored name of loaded sample per track
     let isPlaying = false;
     let currentStep = -1;
     let isRecording = false;
     let recorder = null;
     let recordedBlob = null;
+    let loop = null;
 
     // MIDI State
     let midiAccess = null;
@@ -40,9 +40,8 @@
 
     // Key-assign modal state
     let assigningTrack = -1;
-    let modalKeyHandler = null;
 
-    // Audio nodes (per track, indexed arrays)
+    // Audio nodes (per track)
     const players = [];
     const distortions = [];
     const delays = [];
@@ -64,6 +63,7 @@
     const bpmValue = document.getElementById('bpmValue');
     const swingSlider = document.getElementById('swingSlider');
     const swingValue = document.getElementById('swingValue');
+    const stepSelector = document.getElementById('stepSelector');
     const currentStepEl = document.getElementById('currentStep');
     const stepIndicatorsEl = document.getElementById('stepIndicators');
     const tracksEl = document.getElementById('tracks');
@@ -80,14 +80,11 @@
     const poolCount = document.getElementById('poolCount');
     const closePoolBtn = document.getElementById('closePoolBtn');
     const addTrackBtn = document.getElementById('addTrackBtn');
-    const midiLearnBtn = document.getElementById('midiLearnBtn'); // New button
+    const midiLearnBtn = document.getElementById('midiLearnBtn');
 
     // Modal
     const keyAssignModal = document.getElementById('keyAssignModal');
-    const modalTrackName = document.getElementById('modalTrackName');
-    const modalKeyDisplay = document.getElementById('modalKeyDisplay');
     const modalCancelBtn = document.getElementById('modalCancelBtn');
-    const modalClearBtn = document.getElementById('modalClearBtn');
 
     // ── Helpers ────────────────────────────────────────
     function getTrackColor(index) {
@@ -125,7 +122,6 @@
         // State
         grid.push(Array(NUM_STEPS).fill(false));
         muteState.push(false);
-        keyBindings.push(null);
         sampleNames.push(null);
 
         // DOM
@@ -133,7 +129,6 @@
         buildEffectCard(t, color);
     }
 
-    // ── Remove Track ───────────────────────────────────
     function removeTrack(t) {
         if (numTracks <= 1) return;
 
@@ -152,7 +147,6 @@
         volumes.splice(t, 1);
         grid.splice(t, 1);
         muteState.splice(t, 1);
-        keyBindings.splice(t, 1);
         sampleNames.splice(t, 1);
         padElements.splice(t, 1);
         muteButtons.splice(t, 1);
@@ -181,15 +175,7 @@
             card.querySelector('.track-badge').style.background = `rgba(${color.rgb}, 0.12)`;
             card.querySelector('.track-badge').style.color = color.hex;
 
-            // Re-index slider IDs for MIDI / Save
-            card.querySelectorAll('.effect-slider').forEach(slider => {
-                const key = slider.dataset.fxKey;
-                slider.id = `fx-${key}-${i}`;
-                const valDisplay = card.querySelector(`#fx-${key}-val-${i + 1}`); // wait, prev index was i+1? No, ID logic must be consistent.
-                // Let's rely on dataset attributes + index.
-            });
-            // Update IDs is tricky if we rely on them. Better to rely on Arrays.
-            // But for save/load, we grab by ID. Let's fix IDs.
+            // Re-index slider IDs for Save/Load/MIDI consistency
             card.querySelectorAll('.effect-value').forEach(val => {
                 const key = val.dataset.fxKey;
                 val.id = `fx-${key}-val-${i}`;
@@ -207,7 +193,6 @@
         track.classList.add('track');
         track.style.setProperty('--track-color', color.hex);
         track.style.setProperty('--track-rgb', color.rgb);
-        track.style.animation = 'fade-in 0.3s ease-out';
 
         const info = document.createElement('div');
         info.classList.add('track-info');
@@ -237,16 +222,6 @@
             if (e.target.closest('.key-assign-btn')) return;
             toggleMute(t);
         });
-
-        const keyAssignIcon = document.createElement('div');
-        keyAssignIcon.classList.add('key-assign-btn');
-        keyAssignIcon.innerHTML = '⌨';
-        keyAssignIcon.title = 'Asignar tecla';
-        keyAssignIcon.addEventListener('click', (e) => {
-            e.stopPropagation();
-            openKeyAssignModal(t);
-        });
-        muteBtn.appendChild(keyAssignIcon);
         muteButtons[t] = muteBtn;
 
         const removeBtn = document.createElement('button');
@@ -265,10 +240,7 @@
         padElements[t] = [];
 
         for (let s = 0; s < NUM_STEPS; s++) {
-            const pad = document.createElement('button');
-            pad.classList.add('pad');
-            pad.title = `Track ${t + 1} Step ${s + 1}`;
-            pad.addEventListener('click', () => togglePad(t, s));
+            const pad = createPad(t, s);
             padsContainer.appendChild(pad);
             padElements[t][s] = pad;
         }
@@ -289,6 +261,14 @@
         });
     }
 
+    function createPad(t, s) {
+        const pad = document.createElement('button');
+        pad.classList.add('pad');
+        pad.title = `Step ${s + 1}`;
+        pad.addEventListener('click', () => togglePad(t, s));
+        return pad;
+    }
+
     // ── Build Effect Card ──────────────────────────────
     const FX_DEFS = [
         { key: 'volume', label: 'VOL', min: -40, max: 6, step: 1, defaultVal: 0 },
@@ -303,7 +283,6 @@
     function buildEffectCard(t, color) {
         const card = document.createElement('div');
         card.classList.add('effect-card');
-        card.style.animation = 'fade-in 0.3s ease-out';
 
         const header = document.createElement('div');
         header.classList.add('effect-card-header');
@@ -350,7 +329,7 @@
             // Slider Logic
             slider.addEventListener('mousedown', (e) => {
                 if (isMidiLearning) {
-                    e.preventDefault(); // prevent sliding
+                    e.preventDefault();
                     waitingForMidiCC = { track: t, param: fx.key };
                     document.querySelectorAll('.effect-slider').forEach(el => el.classList.remove('midi-learning-active'));
                     slider.classList.add('midi-learning-active');
@@ -399,14 +378,12 @@
     }
 
     // ── MIDI Integration ───────────────────────────────
-
     function initMIDI() {
         if (navigator.requestMIDIAccess) {
             navigator.requestMIDIAccess().then(onMIDISuccess, onMIDIFailure);
         } else {
             console.warn('WebMIDI is not supported in this browser.');
             midiLearnBtn.disabled = true;
-            midiLearnBtn.title = 'WebMIDI no soportado';
         }
     }
 
@@ -416,19 +393,15 @@
             input.onmidimessage = handleMIDIMessage;
         }
         midiAccess.onstatechange = (e) => {
-            console.log(e.port.name, e.port.state, e.port.connection);
             if (e.port.state === 'connected' && e.port.type === 'input') {
                 e.port.onmidimessage = handleMIDIMessage;
             }
         };
-        // Load mappings
         const saved = localStorage.getItem('neonseq_midi_map');
         if (saved) midiMappings = JSON.parse(saved);
     }
 
-    function onMIDIFailure() {
-        console.warn('Could not access your MIDI devices.');
-    }
+    function onMIDIFailure() { console.warn('Could not access MIDI devices.'); }
 
     function handleMIDIMessage(msg) {
         const [status, data1, data2] = msg.data;
@@ -439,35 +412,28 @@
             const mapKey = `${channel}_${data1}`;
 
             if (isMidiLearning && waitingForMidiCC) {
-                // Assign mapping
                 midiMappings[mapKey] = { ...waitingForMidiCC };
                 waitingForMidiCC = null;
                 isMidiLearning = false;
                 midiLearnBtn.classList.remove('active');
-                midiLearnBtn.textContent = 'MIDI LEARN';
                 document.querySelectorAll('.effect-slider').forEach(el => el.classList.remove('midi-learning-active'));
                 localStorage.setItem('neonseq_midi_map', JSON.stringify(midiMappings));
-                alert(`Asignado CC ${data1} a track ${midiMappings[mapKey].track + 1} - ${midiMappings[mapKey].param}`);
+                alert(`Asignado CC ${data1} a Track ${midiMappings[mapKey].track + 1} - ${midiMappings[mapKey].param}`);
                 return;
             }
 
-            // Execute mapping
             const map = midiMappings[mapKey];
-            if (map) {
-                const { track, param } = map;
-                // Normalize 0-127 to param range
-                const def = FX_DEFS.find(d => d.key === param);
-                if (def && track < numTracks) {
+            if (map && map.track < numTracks) {
+                const def = FX_DEFS.find(d => d.key === map.param);
+                if (def) {
                     const normalized = data2 / 127;
                     const val = def.min + (normalized * (def.max - def.min));
-
-                    // Update UI
-                    const slider = document.getElementById(`fx-${param}-${track}`);
-                    const display = document.getElementById(`fx-${param}-val-${track}`);
+                    const slider = document.getElementById(`fx-${map.param}-${map.track}`);
+                    const display = document.getElementById(`fx-${map.param}-val-${map.track}`);
                     if (slider && display) {
-                        slider.value = val; // let input event handle it? No, set directly
-                        display.textContent = formatFxValue(param, val);
-                        applyEffect(track, param, val);
+                        slider.value = val;
+                        display.textContent = formatFxValue(map.param, val);
+                        applyEffect(map.track, map.param, val);
                     }
                 }
             }
@@ -488,8 +454,6 @@
     });
 
     // ── Sample Handling & Sequencer Logic ──────────────
-    // (Consolidated from previous version, omitted redundant parts for brevity, keeping core logic)
-
     function toggleMute(t) {
         muteState[t] = !muteState[t];
         volumes[t].mute = muteState[t];
@@ -525,39 +489,21 @@
         trackElements[t].querySelector('.upload-btn').classList.add('loaded');
     }
 
-    function loadSamplePool(files) {
-        const audioFiles = Array.from(files).filter(f => f.type.startsWith('audio/') || /\.(wav|mp3)$/i.test(f.name));
-        if (audioFiles.length) samplePoolSection.classList.remove('hidden');
-        for (const f of audioFiles) {
-            const i = samplePool.length;
-            const url = URL.createObjectURL(f);
-            const entry = { name: f.name, blobUrl: url, buffer: null };
-            samplePool.push(entry);
-            const buf = new Tone.Buffer(url, () => entry.buffer = buf);
-
-            const el = document.createElement('div');
-            el.className = 'pool-sample';
-            el.draggable = true;
-            el.innerHTML = `<span>${f.name.substr(0, 16)}</span>`;
-            el.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', String(i)));
-            el.addEventListener('dblclick', () => { if (entry.buffer) { const p = new Tone.Player(entry.buffer).toDestination(); p.start(); } });
-            samplePoolGrid.appendChild(el);
-        }
-        poolCount.textContent = samplePool.length + ' samples';
-    }
-
     function togglePad(t, s) {
         grid[t][s] = !grid[t][s];
         padElements[t][s].classList.toggle('active', grid[t][s]);
     }
 
-    // Sequencer Loop
-    let loop = null;
     function startSequencer() {
-        if (isPlaying) return;
+        if (loop) loop.dispose();
+        if (isPlaying && !loop) return;
+
         Tone.start();
         isPlaying = true;
         playBtn.classList.add('active');
+
+        // Create sequence for current NUM_STEPS
+        const steps = Array.from({ length: NUM_STEPS }, (_, i) => i);
         loop = new Tone.Sequence((time, step) => {
             currentStep = step;
             Tone.Draw.schedule(() => updateVisuals(step), time);
@@ -566,7 +512,8 @@
                     players[t].start(time, 0, '16n');
                 }
             }
-        }, [...Array(NUM_STEPS).keys()], '16n').start(0);
+        }, steps, '16n').start(0);
+
         Tone.Transport.start();
     }
 
@@ -581,7 +528,6 @@
     }
 
     function updateVisuals(step) {
-        // Clear all
         document.querySelectorAll('.step-indicator.active').forEach(e => e.classList.remove('active'));
         document.querySelectorAll('.pad.current').forEach(e => e.classList.remove('current'));
         currentStepEl.textContent = step < 0 ? '--' : (step + 1);
@@ -598,17 +544,66 @@
         }
     }
 
+    // ── Variable Steps Logic ───────────────────────────
+    function initStepIndicators() {
+        stepIndicatorsEl.innerHTML = '';
+        for (let i = 0; i < NUM_STEPS; i++) {
+            const d = document.createElement('div');
+            d.className = 'step-indicator';
+            d.textContent = i + 1;
+            stepIndicatorsEl.appendChild(d);
+        }
+    }
+
+    stepSelector.addEventListener('change', (e) => {
+        const newSteps = parseInt(e.target.value);
+        if (newSteps === NUM_STEPS) return;
+
+        // Resize grid logic
+        for (let t = 0; t < numTracks; t++) {
+            const padsContainer = trackElements[t].querySelector('.pads-container');
+            if (newSteps > NUM_STEPS) {
+                // Grow
+                for (let s = NUM_STEPS; s < newSteps; s++) {
+                    grid[t][s] = false;
+                    const pad = createPad(t, s);
+                    padsContainer.appendChild(pad);
+                    padElements[t][s] = pad;
+                }
+            } else {
+                // Shrink
+                for (let s = NUM_STEPS - 1; s >= newSteps; s--) {
+                    if (padElements[t][s]) {
+                        padElements[t][s].remove();
+                        delete padElements[t][s]; // Clean array
+                    }
+                    grid[t].pop();
+                    padElements[t].pop();
+                }
+            }
+        }
+
+        NUM_STEPS = newSteps;
+        initStepIndicators();
+
+        if (isPlaying) {
+            stopSequencer();
+            startSequencer();
+        }
+    });
+
     // ── Saving & Export ────────────────────────────────
     function saveJSON() {
-        // Collect params
         const data = {
-            version: 4,
+            version: 5,
             bpm: parseInt(bpmSlider.value),
             numTracks,
+            numSteps: NUM_STEPS, // Added numSteps persistence
             grid: grid,
             mutes: muteState,
             effects: {},
-            samples: sampleNames
+            samples: sampleNames,
+            midiMappings: midiMappings // Added MIDI persistence
         };
         for (let t = 0; t < numTracks; t++) {
             data.effects[t] = {};
@@ -624,49 +619,165 @@
         a.click();
     }
 
-    // Load JSON (simplified for brevity)
     async function loadJSON(file) {
-        const txt = await file.text();
-        const data = JSON.parse(txt);
-        stopSequencer();
-        // Reset tracks
-        while (numTracks > 0) removeTrack(numTracks - 1);
-        const count = data.numTracks || 4;
-        for (let i = 0; i < count; i++) addTrack();
+        try {
+            const txt = await file.text();
+            const data = JSON.parse(txt);
 
-        // Restore grid & params
-        // ... (Similar logic to previous, ensuring 64 steps grid restore)
-        for (let t = 0; t < count; t++) {
-            if (data.grid[t]) {
-                for (let s = 0; s < NUM_STEPS; s++) {
-                    if (data.grid[t][s]) {
-                        grid[t][s] = true;
-                        padElements[t][s].classList.add('active');
-                    }
-                }
+            stopSequencer();
+
+            // Restore Step Count
+            if (data.numSteps && data.numSteps !== NUM_STEPS) {
+                stepSelector.value = data.numSteps;
+                stepSelector.dispatchEvent(new Event('change'));
             }
-            if (data.samples && data.samples[t]) {
-                sampleNames[t] = data.samples[t];
-                updateTrackLabel(t, data.samples[t]);
+
+            while (numTracks > 0) removeTrack(numTracks - 1);
+            const count = data.numTracks || 4;
+            for (let i = 0; i < count; i++) addTrack();
+
+            // Restore Mappings
+            if (data.midiMappings) {
+                midiMappings = data.midiMappings;
+                localStorage.setItem('neonseq_midi_map', JSON.stringify(midiMappings));
             }
-        }
-        // Restore Effects
-        if (data.effects) {
+
+            // Restore Grid
             for (let t = 0; t < count; t++) {
-                if (data.effects[t]) {
-                    for (const [k, v] of Object.entries(data.effects[t])) {
-                        applyEffect(t, k, v);
-                        const slider = document.getElementById(`fx-${k}-${t}`);
-                        if (slider) slider.value = v;
-                        const val = document.getElementById(`fx-${k}-val-${t}`);
-                        if (val) val.textContent = formatFxValue(k, v);
+                if (data.grid[t]) {
+                    for (let s = 0; s < NUM_STEPS; s++) {
+                        if (data.grid[t][s]) {
+                            grid[t][s] = true;
+                            if (padElements[t][s]) padElements[t][s].classList.add('active');
+                        }
+                    }
+                }
+                // Try to find sample in pool or just label it
+                if (data.samples && data.samples[t]) {
+                    const sName = data.samples[t];
+                    sampleNames[t] = sName;
+                    // Check pool
+                    const poolItem = samplePool.find(p => p.name === sName);
+                    if (poolItem && poolItem.buffer) {
+                        players[t].buffer = poolItem.buffer;
+                        updateTrackLabel(t, sName);
+                    } else {
+                        updateTrackLabel(t, `${sName} (MISSING)`);
                     }
                 }
             }
+
+            // Restore Effects
+            if (data.effects) {
+                for (let t = 0; t < count; t++) {
+                    if (data.effects[t]) {
+                        for (const [k, v] of Object.entries(data.effects[t])) {
+                            applyEffect(t, k, v);
+                            const slider = document.getElementById(`fx-${k}-${t}`);
+                            if (slider) slider.value = v;
+                            const val = document.getElementById(`fx-${k}-val-${t}`);
+                            if (val) val.textContent = formatFxValue(k, v);
+                        }
+                    }
+                }
+            }
+        } catch (e) { console.error('Error loading JSON', e); alert('Invalid Project File'); }
+    }
+
+
+    // ── Export WAV Fix ─────────────────────────────────
+    // Helper to write string to DataView
+    function writeString(view, offset, string) {
+        for (let i = 0; i < string.length; i++) {
+            view.setUint8(offset + i, string.charCodeAt(i));
         }
     }
 
-    // Init
+    function bufferToWave(abuffer, len) {
+        const numOfChan = abuffer.numberOfChannels;
+        const length = len * numOfChan * 2 + 44;
+        const buffer = new ArrayBuffer(length);
+        const view = new DataView(buffer);
+        const channels = [];
+        let i, sample;
+        let offset = 0;
+        let pos = 0;
+
+        // RIFF chunk descriptor
+        writeString(view, pos, 'RIFF'); pos += 4;
+        view.setUint32(pos, length - 8, true); pos += 4;
+        writeString(view, pos, 'WAVE'); pos += 4;
+
+        // FMT sub-chunk
+        writeString(view, pos, 'fmt '); pos += 4;
+        view.setUint32(pos, 16, true); pos += 4; // Subchunk1Size (16 for PCM)
+        view.setUint16(pos, 1, true); pos += 2; // AudioFormat (1 = PCM)
+        view.setUint16(pos, numOfChan, true); pos += 2;
+        view.setUint32(pos, abuffer.sampleRate, true); pos += 4;
+        view.setUint32(pos, abuffer.sampleRate * 2 * numOfChan, true); pos += 4; // ByteRate
+        view.setUint16(pos, numOfChan * 2, true); pos += 2; // BlockAlign
+        view.setUint16(pos, 16, true); pos += 2; // BitsPerSample
+
+        // Data sub-chunk
+        writeString(view, pos, 'data'); pos += 4;
+        view.setUint32(pos, length - pos - 4, true); pos += 4;
+
+        // Write interleaved data
+        for (i = 0; i < abuffer.numberOfChannels; i++)
+            channels.push(abuffer.getChannelData(i));
+
+        while (pos < length) {
+            for (i = 0; i < numOfChan; i++) {
+                sample = Math.max(-1, Math.min(1, channels[i][offset]));
+                sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767) | 0;
+                view.setInt16(pos, sample, true);
+                pos += 2;
+            }
+            offset++;
+        }
+        return new Blob([buffer], { type: "audio/wav" });
+    }
+
+    // Wiring Export
+    recordBtn.onclick = async () => {
+        if (!isRecording) {
+            await Tone.start();
+            // Start recording
+            recorder = new Tone.Recorder();
+            Tone.getDestination().connect(recorder);
+            recorder.start();
+            isRecording = true;
+            recordBtn.classList.add('recording');
+        } else {
+            // Stop recording
+            const blob = await recorder.stop();
+            const url = URL.createObjectURL(blob);
+
+            // Convert WebM/Opus blob to AudioBuffer then to WAV
+            const fileReader = new FileReader();
+            fileReader.onload = async function () {
+                const arrayBuffer = this.result;
+                const audioBuffer = await Tone.context.decodeAudioData(arrayBuffer);
+                const wavBlob = bufferToWave(audioBuffer, audioBuffer.length);
+                recordedBlob = wavBlob;
+
+                isRecording = false;
+                recordBtn.classList.remove('recording');
+                exportAudioBtn.disabled = false;
+                alert('Audio grabado y convertido a WAV. Listo para descargar.'); // Feedback
+            };
+            fileReader.readAsArrayBuffer(blob);
+        }
+    };
+    exportAudioBtn.onclick = () => {
+        if (!recordedBlob) return;
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(recordedBlob);
+        a.download = `neonseq-${Date.now()}.wav`;
+        a.click();
+    };
+
+    // ── Init ───────────────────────────────────────────
     loadPoolBtn.onclick = () => poolFolderInput.click();
     poolFolderInput.onchange = e => loadSamplePool(e.target.files);
     closePoolBtn.onclick = () => samplePoolSection.classList.add('hidden');
@@ -679,67 +790,32 @@
     bpmSlider.oninput = e => { Tone.Transport.bpm.value = e.target.value; bpmValue.textContent = e.target.value; };
     swingSlider.oninput = e => { Tone.Transport.swing = e.target.value / 100; swingValue.textContent = e.target.value + '%'; };
 
-    // Record / Export (same bufferToWave logic)
-    recordBtn.onclick = async () => {
-        if (!isRecording) {
-            await Tone.start();
-            recorder.start();
-            isRecording = true;
-            recordBtn.classList.add('recording');
-        } else {
-            const blob = await recorder.stop();
-            const url = URL.createObjectURL(blob);
-            // Decode and encode to WAV
-            const ab = await blob.arrayBuffer();
-            const audioBuf = await Tone.context.decodeAudioData(ab);
-            const wav = bufferToWave(audioBuf, audioBuf.length);
-            recordedBlob = wav;
-            isRecording = false;
-            recordBtn.classList.remove('recording');
-            exportAudioBtn.disabled = false;
-        }
-    };
-    exportAudioBtn.onclick = () => {
-        if (!recordedBlob) return;
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(recordedBlob);
-        a.download = 'neonseq.wav';
-        a.click();
-    };
-
-    function bufferToWave(abuffer, len) {
-        // ... (Reuse previous implementation)
-        const numOfChan = abuffer.numberOfChannels, length = len * numOfChan * 2 + 44, buffer = new ArrayBuffer(length), view = new DataView(buffer);
-        let pos = 0;
-        const setUint16 = (d) => { view.setUint16(pos, d, true); pos += 2; };
-        const setUint32 = (d) => { view.setUint32(pos, d, true); pos += 4; };
-        setUint32(0x46464952); setUint32(length - 8); setUint32(0x45564157); setUint32(0x20746d66); setUint32(16); setUint16(1); setUint16(numOfChan); setUint32(abuffer.sampleRate); setUint32(abuffer.sampleRate * 2 * numOfChan); setUint16(numOfChan * 2); setUint16(16); setUint32(0x61746164); setUint32(length - pos - 4);
-        const channels = []; for (let i = 0; i < numOfChan; i++) channels.push(abuffer.getChannelData(i));
-        let offset = 0;
-        while (pos < length) {
-            for (let i = 0; i < numOfChan; i++) {
-                let s = Math.max(-1, Math.min(1, channels[i][offset]));
-                s = (0.5 + s < 0 ? s * 32768 : s * 32767) | 0;
-                view.setInt16(pos, s, true); pos += 2;
-            }
-            offset++;
-        }
-        return new Blob([buffer], { type: "audio/wav" });
-    }
-
-    // Modal
+    // keyAssignModal logic (simplified)
     const openKeyAssignModal = (t) => { assigningTrack = t; keyAssignModal.classList.remove('hidden'); };
     modalCancelBtn.onclick = () => keyAssignModal.classList.add('hidden');
 
-    // Init Calls
-    initMIDI();
-
-    // Step indicators
-    for (let i = 0; i < NUM_STEPS; i++) {
-        const d = document.createElement('div'); d.className = 'step-indicator'; d.textContent = i + 1;
-        stepIndicatorsEl.appendChild(d);
+    function loadSamplePool(files) {
+        const audioFiles = Array.from(files).filter(f => f.type.startsWith('audio/') || /\.(wav|mp3)$/i.test(f.name));
+        if (audioFiles.length) samplePoolSection.classList.remove('hidden');
+        for (const f of audioFiles) {
+            const i = samplePool.length;
+            const url = URL.createObjectURL(f);
+            const entry = { name: f.name, blobUrl: url, buffer: null };
+            samplePool.push(entry);
+            const buf = new Tone.Buffer(url, () => entry.buffer = buf);
+            const el = document.createElement('div');
+            el.className = 'pool-sample';
+            el.draggable = true;
+            el.innerHTML = `<span>${f.name.substr(0, 16)}</span>`;
+            el.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', String(i)));
+            el.addEventListener('dblclick', () => { if (entry.buffer) { const p = new Tone.Player(entry.buffer).toDestination(); p.start(); } });
+            samplePoolGrid.appendChild(el);
+        }
+        poolCount.textContent = samplePool.length + ' samples';
     }
 
+    initMIDI();
+    initStepIndicators();
     for (let i = 0; i < INITIAL_TRACKS; i++) addTrack();
 
 })();
