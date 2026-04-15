@@ -1,5 +1,6 @@
 /* =============================================
    NEON SEQ — Audio Engine, MIDI & UI Controller
+   v3.0 — Inline FX, Filters, Envelopes, Polyrhythm
    Uses Tone.js 14.x & WebMIDI API
    ============================================= */
 
@@ -7,8 +8,9 @@
     'use strict';
 
     // ── Constants ──────────────────────────────────────
-    let NUM_STEPS = 64; // Dynamic
+    let NUM_STEPS = 64;
     const INITIAL_TRACKS = 4;
+    const STEP_OPTIONS = [4, 8, 12, 16, 24, 32, 48, 64];
     const TRACK_COLOR_PALETTE = [
         { hex: '#00d4ff', rgb: '0,212,255' },
         { hex: '#ff2d55', rgb: '255,45,85' },
@@ -22,9 +24,11 @@
 
     // ── State ──────────────────────────────────────────
     let numTracks = 0;
-    const grid = [];          // grid[t][s] = bool
+    let projectName = 'Untitled';
+    const grid = [];
     const muteState = [];
-    const sampleNames = [];   // stored name of loaded sample per track
+    const sampleNames = [];
+    const trackLoopLengths = []; // Per-track loop length for polyrhythm
     let isPlaying = false;
     let currentStep = -1;
     let isRecording = false;
@@ -35,26 +39,24 @@
     // MIDI State
     let midiAccess = null;
     let isMidiLearning = false;
-    let midiMappings = {}; // key: "channel_cc", value: { track: t, param: key }
-    let waitingForMidiCC = null; // { track: t, param: key }
-
-    // Key-assign modal state
-    let assigningTrack = -1;
+    let midiMappings = {};
+    let waitingForMidiCC = null;
 
     // Audio nodes (per track)
     const players = [];
+    const filters = [];      // NEW: Tone.Filter
     const distortions = [];
     const delays = [];
     const reverbs = [];
     const panners = [];
     const volumes = [];
 
-    // DOM elements
-    const padElements = []; // padElements[t][s]
+    // DOM caches
+    const padElements = [];
     const muteButtons = [];
     const trackElements = [];
     const effectCards = [];
-    const samplePool = []; // { name, blobUrl, buffer }
+    const samplePool = [];
 
     // ── DOM refs ───────────────────────────────────────
     const playBtn = document.getElementById('playBtn');
@@ -67,7 +69,6 @@
     const currentStepEl = document.getElementById('currentStep');
     const stepIndicatorsEl = document.getElementById('stepIndicators');
     const tracksEl = document.getElementById('tracks');
-    const effectsContainer = document.getElementById('effectsContainer');
     const recordBtn = document.getElementById('recordBtn');
     const exportAudioBtn = document.getElementById('exportAudioBtn');
     const saveBtn = document.getElementById('saveBtn');
@@ -81,58 +82,58 @@
     const closePoolBtn = document.getElementById('closePoolBtn');
     const addTrackBtn = document.getElementById('addTrackBtn');
     const midiLearnBtn = document.getElementById('midiLearnBtn');
-
-    // Modal
     const keyAssignModal = document.getElementById('keyAssignModal');
     const modalCancelBtn = document.getElementById('modalCancelBtn');
 
     // ── Helpers ────────────────────────────────────────
-    function getTrackColor(index) {
-        return TRACK_COLOR_PALETTE[index % TRACK_COLOR_PALETTE.length];
+    function getTrackColor(i) {
+        return TRACK_COLOR_PALETTE[i % TRACK_COLOR_PALETTE.length];
     }
 
     // ── Audio Chain ────────────────────────────────────
+    // Player -> Filter -> Distortion -> Delay -> Reverb -> Panner -> Volume -> Destination
     function createTrackAudio() {
         const player = new Tone.Player();
         player.volume.value = 0;
+        const filter = new Tone.Filter({ frequency: 20000, type: 'lowpass', Q: 0 });
         const dist = new Tone.Distortion(0);
         const delay = new Tone.FeedbackDelay({ delayTime: 0.25, feedback: 0, wet: 0 });
         const reverb = new Tone.Reverb({ decay: 1.5, wet: 0 });
         const panner = new Tone.Panner(0);
         const vol = new Tone.Volume(0);
-        player.chain(dist, delay, reverb, panner, vol, Tone.getDestination());
-        return { player, dist, delay, reverb, panner, vol };
+        player.chain(filter, dist, delay, reverb, panner, vol, Tone.getDestination());
+        return { player, filter, dist, delay, reverb, panner, vol };
     }
 
-    // ── Add Track ──────────────────────────────────────
+    // ── Track Management ──────────────────────────────
     function addTrack() {
         const t = numTracks;
         numTracks++;
         const color = getTrackColor(t);
 
-        // Audio
         const audio = createTrackAudio();
         players.push(audio.player);
+        filters.push(audio.filter);
         distortions.push(audio.dist);
         delays.push(audio.delay);
         reverbs.push(audio.reverb);
         panners.push(audio.panner);
         volumes.push(audio.vol);
 
-        // State
         grid.push(Array(NUM_STEPS).fill(false));
         muteState.push(false);
         sampleNames.push(null);
+        trackLoopLengths.push(NUM_STEPS);
 
-        // DOM
         buildTrackRow(t, color);
         buildEffectCard(t, color);
     }
 
-    function removeTrack(t) {
-        if (numTracks <= 1) return;
+    function removeTrack(t, force) {
+        if (!force && numTracks <= 1) return;
 
         players[t].dispose();
+        filters[t].dispose();
         distortions[t].dispose();
         delays[t].dispose();
         reverbs[t].dispose();
@@ -140,6 +141,7 @@
         volumes[t].dispose();
 
         players.splice(t, 1);
+        filters.splice(t, 1);
         distortions.splice(t, 1);
         delays.splice(t, 1);
         reverbs.splice(t, 1);
@@ -148,16 +150,20 @@
         grid.splice(t, 1);
         muteState.splice(t, 1);
         sampleNames.splice(t, 1);
+        trackLoopLengths.splice(t, 1);
         padElements.splice(t, 1);
         muteButtons.splice(t, 1);
 
         trackElements[t].remove();
         trackElements.splice(t, 1);
-        effectCards[t].remove();
-        effectCards.splice(t, 1);
+        effectCards.splice(t, 1); // card is child of track, already removed
 
         numTracks--;
-        reindexTracks();
+        if (numTracks > 0) reindexTracks();
+    }
+
+    function clearAllTracks() {
+        while (numTracks > 0) removeTrack(numTracks - 1, true);
     }
 
     function reindexTracks() {
@@ -168,26 +174,22 @@
             el.style.setProperty('--track-rgb', color.rgb);
             el.querySelector('.track-number').textContent = i + 1;
 
-            const card = effectCards[i];
-            card.querySelector('.effect-card-title').textContent = `TRACK ${i + 1}`;
-            card.querySelector('.track-badge').textContent = `TRACK ${i + 1}`;
-            card.querySelector('.effect-card-title').style.color = color.hex;
-            card.querySelector('.track-badge').style.background = `rgba(${color.rgb}, 0.12)`;
-            card.querySelector('.track-badge').style.color = color.hex;
+            const fxPanel = el.querySelector('.inline-fx-panel');
+            if (fxPanel) fxPanel.id = `fx-panel-${i}`;
 
-            // Re-index slider IDs for Save/Load/MIDI consistency
-            card.querySelectorAll('.effect-value').forEach(val => {
-                const key = val.dataset.fxKey;
-                val.id = `fx-${key}-val-${i}`;
-            });
-            card.querySelectorAll('.effect-slider').forEach(slider => {
-                const key = slider.dataset.fxKey;
-                slider.id = `fx-${key}-${i}`;
-            });
+            const card = effectCards[i];
+            if (card) {
+                card.querySelectorAll('.effect-value').forEach(v => {
+                    v.id = `fx-${v.dataset.fxKey}-val-${i}`;
+                });
+                card.querySelectorAll('.effect-slider').forEach(s => {
+                    s.id = `fx-${s.dataset.fxKey}-${i}`;
+                });
+            }
         }
     }
 
-    // ── Build Track DOM ────────────────────────────────
+    // ── Build Track Row ───────────────────────────────
     function buildTrackRow(t, color) {
         const track = document.createElement('div');
         track.classList.add('track');
@@ -216,13 +218,22 @@
 
         const muteBtn = document.createElement('button');
         muteBtn.classList.add('mute-btn');
-        muteBtn.innerHTML = `<span class="mute-label">M</span><span class="key-badge"></span>`;
+        muteBtn.innerHTML = `<span class="mute-label">M</span>`;
         muteBtn.title = 'Mute';
-        muteBtn.addEventListener('click', (e) => {
-            if (e.target.closest('.key-assign-btn')) return;
-            toggleMute(t);
-        });
+        muteBtn.addEventListener('click', () => toggleMute(t));
         muteButtons[t] = muteBtn;
+
+        const fxBtn = document.createElement('button');
+        fxBtn.classList.add('fx-btn');
+        fxBtn.textContent = 'FX';
+        fxBtn.title = 'Efectos';
+        fxBtn.addEventListener('click', () => {
+            const panel = document.getElementById(`fx-panel-${t}`);
+            if (panel) {
+                panel.classList.toggle('hidden');
+                fxBtn.classList.toggle('active');
+            }
+        });
 
         const removeBtn = document.createElement('button');
         removeBtn.classList.add('remove-track-btn');
@@ -233,6 +244,7 @@
         info.appendChild(num);
         info.appendChild(uploadLabel);
         info.appendChild(muteBtn);
+        info.appendChild(fxBtn);
         info.appendChild(removeBtn);
 
         const padsContainer = document.createElement('div');
@@ -245,12 +257,17 @@
             padElements[t][s] = pad;
         }
 
+        const inlineFxPanel = document.createElement('div');
+        inlineFxPanel.classList.add('inline-fx-panel', 'hidden');
+        inlineFxPanel.id = `fx-panel-${t}`;
+
         track.appendChild(info);
         track.appendChild(padsContainer);
+        track.appendChild(inlineFxPanel);
         tracksEl.appendChild(track);
         trackElements[t] = track;
 
-        // Drag & Drop
+        // Drag & Drop from pool
         track.addEventListener('dragover', (e) => { e.preventDefault(); track.classList.add('drag-over'); });
         track.addEventListener('dragleave', () => track.classList.remove('drag-over'));
         track.addEventListener('drop', (e) => {
@@ -269,38 +286,26 @@
         return pad;
     }
 
-    // ── Build Effect Card ──────────────────────────────
+    // ── FX Definitions ────────────────────────────────
     const FX_DEFS = [
-        { key: 'volume', label: 'VOL', min: -40, max: 6, step: 1, defaultVal: 0 },
-        { key: 'pan', label: 'PAN', min: -1, max: 1, step: 0.01, defaultVal: 0 },
-        { key: 'reverb', label: 'REV MIX', min: 0, max: 1, step: 0.01, defaultVal: 0 },
-        { key: 'reverbDecay', label: 'REV TIME', min: 0.1, max: 10, step: 0.1, defaultVal: 1.5 },
-        { key: 'delay', label: 'DLY MIX', min: 0, max: 1, step: 0.01, defaultVal: 0 },
-        { key: 'delayTime', label: 'DLY TIME', min: 0, max: 1, step: 0.01, defaultVal: 0.25 },
-        { key: 'saturation', label: 'SATUR', min: 0, max: 1, step: 0.01, defaultVal: 0 },
+        { key: 'volume',      label: 'VOL',    min: -40,  max: 6,     step: 1,    defaultVal: 0 },
+        { key: 'pan',         label: 'PAN',    min: -1,   max: 1,     step: 0.01, defaultVal: 0 },
+        { key: 'filterFreq',  label: 'CUTOFF', min: 20,   max: 20000, step: 1,    defaultVal: 20000 },
+        { key: 'filterRes',   label: 'RES',    min: 0,    max: 20,    step: 0.1,  defaultVal: 0 },
+        { key: 'attack',      label: 'ATK',    min: 0,    max: 0.5,   step: 0.01, defaultVal: 0 },
+        { key: 'release',     label: 'REL',    min: 0,    max: 2,     step: 0.01, defaultVal: 0 },
+        { key: 'reverb',      label: 'REV',    min: 0,    max: 1,     step: 0.01, defaultVal: 0 },
+        { key: 'reverbDecay', label: 'REVT',   min: 0.1,  max: 10,    step: 0.1,  defaultVal: 1.5 },
+        { key: 'delay',       label: 'DLY',    min: 0,    max: 1,     step: 0.01, defaultVal: 0 },
+        { key: 'delayTime',   label: 'DLYT',   min: 0,    max: 1,     step: 0.01, defaultVal: 0.25 },
+        { key: 'saturation',  label: 'SAT',    min: 0,    max: 1,     step: 0.01, defaultVal: 0 },
+        { key: 'loopLength',  label: 'LOOP',   min: 1,    max: 64,    step: 1,    defaultVal: 64 },
     ];
 
+    // ── Build Effect Card (Inline) ────────────────────
     function buildEffectCard(t, color) {
         const card = document.createElement('div');
-        card.classList.add('effect-card');
-
-        const header = document.createElement('div');
-        header.classList.add('effect-card-header');
-
-        const title = document.createElement('span');
-        title.classList.add('effect-card-title');
-        title.textContent = `TRACK ${t + 1}`;
-        title.style.color = color.hex;
-
-        const badge = document.createElement('span');
-        badge.classList.add('track-badge');
-        badge.textContent = `TRACK ${t + 1}`;
-        badge.style.background = `rgba(${color.rgb}, 0.12)`;
-        badge.style.color = color.hex;
-
-        header.appendChild(title);
-        header.appendChild(badge);
-        card.appendChild(header);
+        card.classList.add('effect-card', 'inline-card');
 
         for (const fx of FX_DEFS) {
             const row = document.createElement('div');
@@ -315,7 +320,7 @@
             slider.min = fx.min;
             slider.max = fx.max;
             slider.step = fx.step;
-            slider.value = fx.defaultVal;
+            slider.value = fx.key === 'loopLength' ? NUM_STEPS : fx.defaultVal;
             slider.classList.add('slider', 'effect-slider', t % 2 === 0 ? 'slider-blue' : 'slider-red');
             slider.id = `fx-${fx.key}-${t}`;
             slider.dataset.fxKey = fx.key;
@@ -324,16 +329,14 @@
             valDisplay.classList.add('effect-value');
             valDisplay.id = `fx-${fx.key}-val-${t}`;
             valDisplay.dataset.fxKey = fx.key;
-            valDisplay.textContent = formatFxValue(fx.key, fx.defaultVal);
+            valDisplay.textContent = formatFxValue(fx.key, fx.key === 'loopLength' ? NUM_STEPS : fx.defaultVal);
 
-            // Slider Logic
             slider.addEventListener('mousedown', (e) => {
                 if (isMidiLearning) {
                     e.preventDefault();
                     waitingForMidiCC = { track: t, param: fx.key };
                     document.querySelectorAll('.effect-slider').forEach(el => el.classList.remove('midi-learning-active'));
                     slider.classList.add('midi-learning-active');
-                    alert(`Esperando señal MIDI para: Track ${t + 1} - ${fx.label}... Mové un control en tu dispositivo.`);
                 }
             });
 
@@ -350,7 +353,8 @@
             card.appendChild(row);
         }
 
-        effectsContainer.appendChild(card);
+        const inlinePanel = document.getElementById(`fx-panel-${t}`);
+        if (inlinePanel) inlinePanel.appendChild(card);
         effectCards[t] = card;
     }
 
@@ -360,6 +364,10 @@
             case 'pan': return v === 0 ? 'C' : (v < 0 ? `L${Math.abs(Math.round(v * 10))}` : `R${Math.round(v * 10)}`);
             case 'reverb': case 'delay': case 'saturation': return `${Math.round(v * 100)}%`;
             case 'reverbDecay': case 'delayTime': return `${v.toFixed(2)}s`;
+            case 'filterFreq': return v >= 1000 ? `${(v/1000).toFixed(1)}k` : `${Math.round(v)}Hz`;
+            case 'filterRes': return v.toFixed(1);
+            case 'attack': case 'release': return `${(v * 1000).toFixed(0)}ms`;
+            case 'loopLength': return `${Math.round(v)}`;
             default: return v;
         }
     }
@@ -367,93 +375,83 @@
     function applyEffect(trackIdx, key, value) {
         if (trackIdx >= numTracks) return;
         switch (key) {
-            case 'volume': volumes[trackIdx].volume.value = value; break;
-            case 'pan': panners[trackIdx].pan.value = value; break;
-            case 'reverb': reverbs[trackIdx].wet.value = value; break;
+            case 'volume':      volumes[trackIdx].volume.value = value; break;
+            case 'pan':         panners[trackIdx].pan.value = value; break;
+            case 'filterFreq':  filters[trackIdx].frequency.value = value; break;
+            case 'filterRes':   filters[trackIdx].Q.value = value; break;
+            case 'attack':      players[trackIdx].fadeIn = value; break;
+            case 'release':     players[trackIdx].fadeOut = value; break;
+            case 'reverb':      reverbs[trackIdx].wet.value = value; break;
             case 'reverbDecay': reverbs[trackIdx].decay = value; break;
-            case 'delay': delays[trackIdx].wet.value = value; delays[trackIdx].feedback.value = value * 0.6; break;
-            case 'delayTime': delays[trackIdx].delayTime.value = value; break;
-            case 'saturation': distortions[trackIdx].distortion = value; distortions[trackIdx].wet.value = value > 0 ? 1 : 0; break;
+            case 'delay':       delays[trackIdx].wet.value = value; delays[trackIdx].feedback.value = value * 0.6; break;
+            case 'delayTime':   delays[trackIdx].delayTime.value = value; break;
+            case 'saturation':  distortions[trackIdx].distortion = value; distortions[trackIdx].wet.value = value > 0 ? 1 : 0; break;
+            case 'loopLength':  trackLoopLengths[trackIdx] = Math.round(value); break;
         }
     }
 
-    // ── MIDI Integration ───────────────────────────────
+    // ── MIDI ──────────────────────────────────────────
     function initMIDI() {
         if (navigator.requestMIDIAccess) {
-            navigator.requestMIDIAccess().then(onMIDISuccess, onMIDIFailure);
+            navigator.requestMIDIAccess().then(onMIDISuccess, () => console.warn('MIDI not available'));
         } else {
-            console.warn('WebMIDI is not supported in this browser.');
-            midiLearnBtn.disabled = true;
+            if (midiLearnBtn) midiLearnBtn.disabled = true;
         }
     }
 
     function onMIDISuccess(midi) {
         midiAccess = midi;
-        for (let input of midiAccess.inputs.values()) {
-            input.onmidimessage = handleMIDIMessage;
-        }
+        for (let input of midiAccess.inputs.values()) input.onmidimessage = handleMIDIMessage;
         midiAccess.onstatechange = (e) => {
-            if (e.port.state === 'connected' && e.port.type === 'input') {
-                e.port.onmidimessage = handleMIDIMessage;
-            }
+            if (e.port.state === 'connected' && e.port.type === 'input') e.port.onmidimessage = handleMIDIMessage;
         };
         const saved = localStorage.getItem('neonseq_midi_map');
-        if (saved) midiMappings = JSON.parse(saved);
+        if (saved) try { midiMappings = JSON.parse(saved); } catch(e) {}
     }
-
-    function onMIDIFailure() { console.warn('Could not access MIDI devices.'); }
 
     function handleMIDIMessage(msg) {
         const [status, data1, data2] = msg.data;
-        const channel = status & 0xf;
         const cmd = status >> 4;
+        const channel = status & 0xf;
 
-        if (cmd === 11) { // Control Change (CC)
+        if (cmd === 11) {
             const mapKey = `${channel}_${data1}`;
-
             if (isMidiLearning && waitingForMidiCC) {
                 midiMappings[mapKey] = { ...waitingForMidiCC };
                 waitingForMidiCC = null;
                 isMidiLearning = false;
                 midiLearnBtn.classList.remove('active');
+                midiLearnBtn.textContent = 'MIDI LEARN';
                 document.querySelectorAll('.effect-slider').forEach(el => el.classList.remove('midi-learning-active'));
                 localStorage.setItem('neonseq_midi_map', JSON.stringify(midiMappings));
-                alert(`Asignado CC ${data1} a Track ${midiMappings[mapKey].track + 1} - ${midiMappings[mapKey].param}`);
                 return;
             }
-
             const map = midiMappings[mapKey];
             if (map && map.track < numTracks) {
                 const def = FX_DEFS.find(d => d.key === map.param);
                 if (def) {
-                    const normalized = data2 / 127;
-                    const val = def.min + (normalized * (def.max - def.min));
+                    const val = def.min + ((data2 / 127) * (def.max - def.min));
+                    applyEffect(map.track, map.param, val);
                     const slider = document.getElementById(`fx-${map.param}-${map.track}`);
                     const display = document.getElementById(`fx-${map.param}-val-${map.track}`);
-                    if (slider && display) {
-                        slider.value = val;
-                        display.textContent = formatFxValue(map.param, val);
-                        applyEffect(map.track, map.param, val);
-                    }
+                    if (slider) slider.value = val;
+                    if (display) display.textContent = formatFxValue(map.param, val);
                 }
             }
         }
     }
 
-    midiLearnBtn.addEventListener('click', () => {
+    if (midiLearnBtn) midiLearnBtn.addEventListener('click', () => {
         isMidiLearning = !isMidiLearning;
         midiLearnBtn.classList.toggle('active', isMidiLearning);
-        if (isMidiLearning) {
-            midiLearnBtn.textContent = 'LEARNING...';
-            waitingForMidiCC = null;
-        } else {
-            midiLearnBtn.textContent = 'MIDI LEARN';
+        midiLearnBtn.textContent = isMidiLearning ? 'LEARNING...' : 'MIDI LEARN';
+        if (!isMidiLearning) {
             waitingForMidiCC = null;
             document.querySelectorAll('.effect-slider').forEach(el => el.classList.remove('midi-learning-active'));
         }
     });
 
-    // ── Sample Handling & Sequencer Logic ──────────────
+    // ── Sample Handling ───────────────────────────────
     function toggleMute(t) {
         muteState[t] = !muteState[t];
         volumes[t].mute = muteState[t];
@@ -484,9 +482,11 @@
     }
 
     function updateTrackLabel(t, name) {
-        const span = trackElements[t].querySelector('.upload-btn span');
-        span.textContent = name.length > 12 ? name.substring(0, 10) + '...' : name;
-        trackElements[t].querySelector('.upload-btn').classList.add('loaded');
+        const span = trackElements[t]?.querySelector('.upload-btn span');
+        if (span) {
+            span.textContent = name.length > 12 ? name.substring(0, 10) + '…' : name;
+            trackElements[t].querySelector('.upload-btn').classList.add('loaded');
+        }
     }
 
     function togglePad(t, s) {
@@ -494,22 +494,24 @@
         padElements[t][s].classList.toggle('active', grid[t][s]);
     }
 
-    function startSequencer() {
-        if (loop) loop.dispose();
-        if (isPlaying && !loop) return;
+    // ── Sequencer ─────────────────────────────────────
+    async function startSequencer() {
+        if (loop) { loop.stop(); loop.dispose(); loop = null; }
 
-        Tone.start();
+        await Tone.start(); // FIX: await AudioContext resume
         isPlaying = true;
         playBtn.classList.add('active');
 
-        // Create sequence for current NUM_STEPS
         const steps = Array.from({ length: NUM_STEPS }, (_, i) => i);
         loop = new Tone.Sequence((time, step) => {
             currentStep = step;
             Tone.Draw.schedule(() => updateVisuals(step), time);
             for (let t = 0; t < numTracks; t++) {
-                if (grid[t][step] && !muteState[t] && players[t].buffer.loaded) {
-                    players[t].start(time, 0, '16n');
+                // Polyrhythm: use modulo of track's loop length
+                const loopLen = trackLoopLengths[t] || NUM_STEPS;
+                const effectiveStep = step % loopLen;
+                if (grid[t][effectiveStep] && !muteState[t] && players[t].buffer && players[t].buffer.loaded) {
+                    players[t].start(time, 0);
                 }
             }
         }, steps, '16n').start(0);
@@ -533,18 +535,20 @@
         currentStepEl.textContent = step < 0 ? '--' : (step + 1);
 
         if (step >= 0) {
-            if (stepIndicatorsEl.children[step]) {
-                const ind = stepIndicatorsEl.children[step];
+            const ind = stepIndicatorsEl.children[step];
+            if (ind) {
                 ind.classList.add('active');
                 ind.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
             }
             for (let t = 0; t < numTracks; t++) {
-                if (padElements[t][step]) padElements[t][step].classList.add('current');
+                const loopLen = trackLoopLengths[t] || NUM_STEPS;
+                const effectiveStep = step % loopLen;
+                if (padElements[t][effectiveStep]) padElements[t][effectiveStep].classList.add('current');
             }
         }
     }
 
-    // ── Variable Steps Logic ───────────────────────────
+    // ── Variable Steps ────────────────────────────────
     function initStepIndicators() {
         stepIndicatorsEl.innerHTML = '';
         for (let i = 0; i < NUM_STEPS; i++) {
@@ -555,15 +559,11 @@
         }
     }
 
-    stepSelector.addEventListener('change', (e) => {
-        const newSteps = parseInt(e.target.value);
+    function setStepCount(newSteps) {
         if (newSteps === NUM_STEPS) return;
-
-        // Resize grid logic
         for (let t = 0; t < numTracks; t++) {
             const padsContainer = trackElements[t].querySelector('.pads-container');
             if (newSteps > NUM_STEPS) {
-                // Grow
                 for (let s = NUM_STEPS; s < newSteps; s++) {
                     grid[t][s] = false;
                     const pad = createPad(t, s);
@@ -571,39 +571,50 @@
                     padElements[t][s] = pad;
                 }
             } else {
-                // Shrink
                 for (let s = NUM_STEPS - 1; s >= newSteps; s--) {
-                    if (padElements[t][s]) {
-                        padElements[t][s].remove();
-                        delete padElements[t][s]; // Clean array
-                    }
-                    grid[t].pop();
-                    padElements[t].pop();
+                    if (padElements[t][s]) padElements[t][s].remove();
+                    grid[t].length = newSteps;
+                    padElements[t].length = newSteps;
+                }
+            }
+            // Update loop length slider max and clamp value
+            const loopSlider = document.getElementById(`fx-loopLength-${t}`);
+            if (loopSlider) {
+                loopSlider.max = newSteps;
+                if (trackLoopLengths[t] > newSteps) {
+                    trackLoopLengths[t] = newSteps;
+                    loopSlider.value = newSteps;
+                    const disp = document.getElementById(`fx-loopLength-val-${t}`);
+                    if (disp) disp.textContent = newSteps;
                 }
             }
         }
-
         NUM_STEPS = newSteps;
         initStepIndicators();
+        if (isPlaying) { stopSequencer(); startSequencer(); }
+    }
 
-        if (isPlaying) {
-            stopSequencer();
-            startSequencer();
-        }
-    });
+    stepSelector.addEventListener('change', (e) => setStepCount(parseInt(e.target.value)));
 
-    // ── Saving & Export ────────────────────────────────
+    // ── Save / Load ───────────────────────────────────
     function saveJSON() {
+        const name = prompt('Nombre del proyecto:', projectName);
+        if (!name) return;
+        projectName = name;
+
         const data = {
-            version: 5,
+            version: 6,
+            name: projectName,
             bpm: parseInt(bpmSlider.value),
+            swing: parseInt(swingSlider.value),
             numTracks,
-            numSteps: NUM_STEPS, // Added numSteps persistence
-            grid: grid,
+            numSteps: NUM_STEPS,
+            grid,
             mutes: muteState,
+            loopLengths: trackLoopLengths,
             effects: {},
             samples: sampleNames,
-            midiMappings: midiMappings // Added MIDI persistence
+            midiMappings
         };
         for (let t = 0; t < numTracks; t++) {
             data.effects[t] = {};
@@ -612,10 +623,10 @@
                 if (el) data.effects[t][fx.key] = parseFloat(el.value);
             });
         }
-        const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = 'neonseq-project.json';
+        a.download = `${projectName.replace(/[^a-zA-Z0-9_-]/g, '_')}.json`;
         a.click();
     }
 
@@ -625,49 +636,64 @@
             const data = JSON.parse(txt);
 
             stopSequencer();
+            clearAllTracks();
 
-            // Restore Step Count
-            if (data.numSteps && data.numSteps !== NUM_STEPS) {
-                stepSelector.value = data.numSteps;
-                stepSelector.dispatchEvent(new Event('change'));
-            }
+            // Restore step count
+            const steps = data.numSteps || 64;
+            NUM_STEPS = steps;
+            stepSelector.value = steps;
+            initStepIndicators();
 
-            while (numTracks > 0) removeTrack(numTracks - 1);
+            // Update loop length max in FX_DEFS
+            const loopDef = FX_DEFS.find(d => d.key === 'loopLength');
+            if (loopDef) loopDef.max = NUM_STEPS;
+
+            // Restore project name
+            if (data.name) projectName = data.name;
+
+            // Restore BPM & Swing
+            if (data.bpm) { bpmSlider.value = data.bpm; bpmValue.textContent = data.bpm; Tone.Transport.bpm.value = data.bpm; }
+            if (data.swing !== undefined) { swingSlider.value = data.swing; swingValue.textContent = data.swing + '%'; Tone.Transport.swing = data.swing / 100; }
+
+            // Recreate tracks
             const count = data.numTracks || 4;
             for (let i = 0; i < count; i++) addTrack();
 
-            // Restore Mappings
+            // Restore MIDI mappings
             if (data.midiMappings) {
                 midiMappings = data.midiMappings;
                 localStorage.setItem('neonseq_midi_map', JSON.stringify(midiMappings));
             }
 
-            // Restore Grid
+            // Restore grid
             for (let t = 0; t < count; t++) {
                 if (data.grid[t]) {
                     for (let s = 0; s < NUM_STEPS; s++) {
-                        if (data.grid[t][s]) {
+                        if (data.grid[t]?.[s]) {
                             grid[t][s] = true;
-                            if (padElements[t][s]) padElements[t][s].classList.add('active');
+                            if (padElements[t]?.[s]) padElements[t][s].classList.add('active');
                         }
                     }
                 }
-                // Try to find sample in pool or just label it
-                if (data.samples && data.samples[t]) {
+                // Restore loop lengths (polyrhythm)
+                if (data.loopLengths?.[t]) {
+                    trackLoopLengths[t] = data.loopLengths[t];
+                }
+                // Restore sample name
+                if (data.samples?.[t]) {
                     const sName = data.samples[t];
                     sampleNames[t] = sName;
-                    // Check pool
                     const poolItem = samplePool.find(p => p.name === sName);
-                    if (poolItem && poolItem.buffer) {
+                    if (poolItem?.buffer) {
                         players[t].buffer = poolItem.buffer;
                         updateTrackLabel(t, sName);
                     } else {
-                        updateTrackLabel(t, `${sName} (MISSING)`);
+                        updateTrackLabel(t, `⚠ ${sName}`);
                     }
                 }
             }
 
-            // Restore Effects
+            // Restore effects
             if (data.effects) {
                 for (let t = 0; t < count; t++) {
                     if (data.effects[t]) {
@@ -681,121 +707,90 @@
                     }
                 }
             }
-        } catch (e) { console.error('Error loading JSON', e); alert('Invalid Project File'); }
-    }
-
-
-    // ── Export WAV Fix ─────────────────────────────────
-    // Helper to write string to DataView
-    function writeString(view, offset, string) {
-        for (let i = 0; i < string.length; i++) {
-            view.setUint8(offset + i, string.charCodeAt(i));
+        } catch (e) {
+            console.error('Error loading project:', e);
+            alert('Error cargando el proyecto. Archivo inválido.');
         }
     }
 
-    function bufferToWave(abuffer, len) {
-        const numOfChan = abuffer.numberOfChannels;
-        const length = len * numOfChan * 2 + 44;
-        const buffer = new ArrayBuffer(length);
-        const view = new DataView(buffer);
-        const channels = [];
-        let i, sample;
-        let offset = 0;
-        let pos = 0;
+    // ── WAV Export ─────────────────────────────────────
+    function writeString(view, offset, str) {
+        for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+    }
 
-        // RIFF chunk descriptor
+    function bufferToWave(abuffer, len) {
+        const numCh = abuffer.numberOfChannels;
+        const length = len * numCh * 2 + 44;
+        const buf = new ArrayBuffer(length);
+        const view = new DataView(buf);
+        const channels = [];
+        let pos = 0, offset = 0;
+
         writeString(view, pos, 'RIFF'); pos += 4;
         view.setUint32(pos, length - 8, true); pos += 4;
         writeString(view, pos, 'WAVE'); pos += 4;
-
-        // FMT sub-chunk
         writeString(view, pos, 'fmt '); pos += 4;
-        view.setUint32(pos, 16, true); pos += 4; // Subchunk1Size (16 for PCM)
-        view.setUint16(pos, 1, true); pos += 2; // AudioFormat (1 = PCM)
-        view.setUint16(pos, numOfChan, true); pos += 2;
+        view.setUint32(pos, 16, true); pos += 4;
+        view.setUint16(pos, 1, true); pos += 2;
+        view.setUint16(pos, numCh, true); pos += 2;
         view.setUint32(pos, abuffer.sampleRate, true); pos += 4;
-        view.setUint32(pos, abuffer.sampleRate * 2 * numOfChan, true); pos += 4; // ByteRate
-        view.setUint16(pos, numOfChan * 2, true); pos += 2; // BlockAlign
-        view.setUint16(pos, 16, true); pos += 2; // BitsPerSample
-
-        // Data sub-chunk
+        view.setUint32(pos, abuffer.sampleRate * 2 * numCh, true); pos += 4;
+        view.setUint16(pos, numCh * 2, true); pos += 2;
+        view.setUint16(pos, 16, true); pos += 2;
         writeString(view, pos, 'data'); pos += 4;
         view.setUint32(pos, length - pos - 4, true); pos += 4;
 
-        // Write interleaved data
-        for (i = 0; i < abuffer.numberOfChannels; i++)
-            channels.push(abuffer.getChannelData(i));
+        for (let i = 0; i < numCh; i++) channels.push(abuffer.getChannelData(i));
 
         while (pos < length) {
-            for (i = 0; i < numOfChan; i++) {
-                sample = Math.max(-1, Math.min(1, channels[i][offset]));
-                sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767) | 0;
-                view.setInt16(pos, sample, true);
+            for (let i = 0; i < numCh; i++) {
+                let s = Math.max(-1, Math.min(1, channels[i][offset]));
+                s = (0.5 + s < 0 ? s * 32768 : s * 32767) | 0;
+                view.setInt16(pos, s, true);
                 pos += 2;
             }
             offset++;
         }
-        return new Blob([buffer], { type: "audio/wav" });
+        return new Blob([buf], { type: 'audio/wav' });
     }
 
-    // Wiring Export
     recordBtn.onclick = async () => {
         if (!isRecording) {
             await Tone.start();
-            // Start recording
             recorder = new Tone.Recorder();
             Tone.getDestination().connect(recorder);
             recorder.start();
             isRecording = true;
             recordBtn.classList.add('recording');
         } else {
-            // Stop recording
             const blob = await recorder.stop();
-            const url = URL.createObjectURL(blob);
-
-            // Convert WebM/Opus blob to AudioBuffer then to WAV
-            const fileReader = new FileReader();
-            fileReader.onload = async function () {
-                const arrayBuffer = this.result;
-                const audioBuffer = await Tone.context.decodeAudioData(arrayBuffer);
-                const wavBlob = bufferToWave(audioBuffer, audioBuffer.length);
-                recordedBlob = wavBlob;
-
+            const fr = new FileReader();
+            fr.onload = async function () {
+                try {
+                    const audioBuffer = await Tone.context.decodeAudioData(this.result);
+                    recordedBlob = bufferToWave(audioBuffer, audioBuffer.length);
+                    exportAudioBtn.disabled = false;
+                } catch (e) {
+                    console.error('WAV conversion error:', e);
+                }
                 isRecording = false;
                 recordBtn.classList.remove('recording');
-                exportAudioBtn.disabled = false;
-                alert('Audio grabado y convertido a WAV. Listo para descargar.'); // Feedback
             };
-            fileReader.readAsArrayBuffer(blob);
+            fr.readAsArrayBuffer(blob);
         }
     };
+
     exportAudioBtn.onclick = () => {
         if (!recordedBlob) return;
         const a = document.createElement('a');
         a.href = URL.createObjectURL(recordedBlob);
-        a.download = `neonseq-${Date.now()}.wav`;
+        a.download = `${projectName}-${Date.now()}.wav`;
         a.click();
     };
 
-    // ── Init ───────────────────────────────────────────
-    loadPoolBtn.onclick = () => poolFolderInput.click();
-    poolFolderInput.onchange = e => loadSamplePool(e.target.files);
-    closePoolBtn.onclick = () => samplePoolSection.classList.add('hidden');
-    saveBtn.onclick = saveJSON;
-    loadBtn.onclick = () => loadJsonInput.click();
-    loadJsonInput.onchange = e => loadJSON(e.target.files[0]);
-    playBtn.onclick = () => isPlaying ? stopSequencer() : startSequencer();
-    stopBtn.onclick = stopSequencer;
-    addTrackBtn.onclick = addTrack;
-    bpmSlider.oninput = e => { Tone.Transport.bpm.value = e.target.value; bpmValue.textContent = e.target.value; };
-    swingSlider.oninput = e => { Tone.Transport.swing = e.target.value / 100; swingValue.textContent = e.target.value + '%'; };
-
-    // keyAssignModal logic (simplified)
-    const openKeyAssignModal = (t) => { assigningTrack = t; keyAssignModal.classList.remove('hidden'); };
-    modalCancelBtn.onclick = () => keyAssignModal.classList.add('hidden');
-
+    // ── Sample Pool ───────────────────────────────────
     function loadSamplePool(files) {
-        const audioFiles = Array.from(files).filter(f => f.type.startsWith('audio/') || /\.(wav|mp3)$/i.test(f.name));
+        const audioFiles = Array.from(files).filter(f => f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac)$/i.test(f.name));
         if (audioFiles.length) samplePoolSection.classList.remove('hidden');
         for (const f of audioFiles) {
             const i = samplePool.length;
@@ -814,6 +809,21 @@
         poolCount.textContent = samplePool.length + ' samples';
     }
 
+    // ── Event Wiring ──────────────────────────────────
+    loadPoolBtn.onclick = () => poolFolderInput.click();
+    poolFolderInput.onchange = e => loadSamplePool(e.target.files);
+    closePoolBtn.onclick = () => samplePoolSection.classList.add('hidden');
+    saveBtn.onclick = saveJSON;
+    loadBtn.onclick = () => loadJsonInput.click();
+    loadJsonInput.onchange = e => { if (e.target.files[0]) loadJSON(e.target.files[0]); };
+    playBtn.onclick = () => isPlaying ? stopSequencer() : startSequencer();
+    stopBtn.onclick = stopSequencer;
+    addTrackBtn.onclick = addTrack;
+    bpmSlider.oninput = e => { Tone.Transport.bpm.value = e.target.value; bpmValue.textContent = e.target.value; };
+    swingSlider.oninput = e => { Tone.Transport.swing = e.target.value / 100; swingValue.textContent = e.target.value + '%'; };
+    if (modalCancelBtn) modalCancelBtn.onclick = () => keyAssignModal?.classList.add('hidden');
+
+    // ── Init ──────────────────────────────────────────
     initMIDI();
     initStepIndicators();
     for (let i = 0; i < INITIAL_TRACKS; i++) addTrack();
