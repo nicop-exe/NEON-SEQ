@@ -305,7 +305,7 @@
     // ── Build Effect Card (Inline) ────────────────────
     function buildEffectCard(t, color) {
         const card = document.createElement('div');
-        card.classList.add('effect-card', 'inline-card');
+        card.classList.add('inline-card');
 
         for (const fx of FX_DEFS) {
             const row = document.createElement('div');

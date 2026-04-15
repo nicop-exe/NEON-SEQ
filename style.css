@@ -782,20 +782,6 @@ body {
    EFFECTS (Inline per-track)
    ============================================= */
 
-.effect-card {
-    background: var(--bg-card);
-    backdrop-filter: blur(12px);
-    border-radius: var(--radius-lg);
-    border: 1px solid var(--border);
-    padding: 16px;
-    transition: all var(--transition-med);
-}
-
-.effect-card:hover {
-    border-color: var(--border-hover);
-    background: var(--bg-card-hover);
-}
-
 .effect-card-header {
     display: flex;
     align-items: center;
@@ -968,8 +954,7 @@ body {
     }
 }
 
-.track,
-.effect-card {
+.track {
     animation: fade-in 0.4s ease-out backwards;
 }
 
