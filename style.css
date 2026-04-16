@@ -559,8 +559,8 @@ body {
 
 .inline-card {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-    gap: 4px 16px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2px 20px;
     background: none;
     border: none;
     padding: 0;
