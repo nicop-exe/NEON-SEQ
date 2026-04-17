@@ -545,9 +545,12 @@ body {
 
 /* ── Inline FX Panel ── */
 .inline-fx-panel {
-    width: 100%;
-    padding: 6px 12px;
-    background: rgba(15, 15, 35, 0.6);
+    width: calc(100vw - 80px);
+    max-width: 700px;
+    position: sticky;
+    left: 0;
+    padding: 8px 12px;
+    background: rgba(15, 15, 35, 0.85);
     border-top: 1px solid var(--border);
     border-radius: 0 0 var(--radius-md) var(--radius-md);
     animation: slide-down 0.15s ease-out;
