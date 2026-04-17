@@ -69,6 +69,7 @@
     const currentStepEl = document.getElementById('currentStep');
     const stepIndicatorsEl = document.getElementById('stepIndicators');
     const tracksEl = document.getElementById('tracks');
+    const fxPanelsContainer = document.getElementById('fxPanelsContainer');
     const recordBtn = document.getElementById('recordBtn');
     const exportAudioBtn = document.getElementById('exportAudioBtn');
     const saveBtn = document.getElementById('saveBtn');
@@ -156,7 +157,11 @@
 
         trackElements[t].remove();
         trackElements.splice(t, 1);
-        effectCards.splice(t, 1); // card is child of track, already removed
+
+        // Remove FX panel from external container
+        const fxPanel = document.getElementById(`fx-panel-${t}`);
+        if (fxPanel) fxPanel.remove();
+        effectCards.splice(t, 1);
 
         numTracks--;
         if (numTracks > 0) reindexTracks();
@@ -174,8 +179,16 @@
             el.style.setProperty('--track-rgb', color.rgb);
             el.querySelector('.track-number').textContent = i + 1;
 
-            const fxPanel = el.querySelector('.inline-fx-panel');
-            if (fxPanel) fxPanel.id = `fx-panel-${i}`;
+            // Reindex external FX panels
+            const panels = fxPanelsContainer.querySelectorAll('.fx-panel');
+            if (panels[i]) {
+                panels[i].id = `fx-panel-${i}`;
+                const header = panels[i].querySelector('.fx-panel-title');
+                if (header) {
+                    header.textContent = `TRACK ${i + 1} — FX`;
+                    header.style.color = color.hex;
+                }
+            }
 
             const card = effectCards[i];
             if (card) {
@@ -227,13 +240,7 @@
         fxBtn.classList.add('fx-btn');
         fxBtn.textContent = 'FX';
         fxBtn.title = 'Efectos';
-        fxBtn.addEventListener('click', () => {
-            const panel = document.getElementById(`fx-panel-${t}`);
-            if (panel) {
-                panel.classList.toggle('hidden');
-                fxBtn.classList.toggle('active');
-            }
-        });
+        fxBtn.addEventListener('click', () => toggleFxPanel(t));
 
         const removeBtn = document.createElement('button');
         removeBtn.classList.add('remove-track-btn');
@@ -257,13 +264,8 @@
             padElements[t][s] = pad;
         }
 
-        const inlineFxPanel = document.createElement('div');
-        inlineFxPanel.classList.add('inline-fx-panel', 'hidden');
-        inlineFxPanel.id = `fx-panel-${t}`;
-
         track.appendChild(info);
         track.appendChild(padsContainer);
-        track.appendChild(inlineFxPanel);
         tracksEl.appendChild(track);
         trackElements[t] = track;
 
@@ -302,8 +304,58 @@
         { key: 'loopLength',  label: 'LOOP',   min: 1,    max: 64,    step: 1,    defaultVal: 64 },
     ];
 
-    // ── Build Effect Card (Inline) ────────────────────
+    // ── Toggle FX Panel (one at a time) ─────────────────
+    let activeFxTrack = -1;
+
+    function toggleFxPanel(t) {
+        // Close all FX buttons
+        document.querySelectorAll('.fx-btn.active').forEach(b => b.classList.remove('active'));
+
+        if (activeFxTrack === t) {
+            // Close current
+            const panel = document.getElementById(`fx-panel-${t}`);
+            if (panel) panel.classList.add('hidden');
+            activeFxTrack = -1;
+            return;
+        }
+
+        // Hide all panels
+        fxPanelsContainer.querySelectorAll('.fx-panel').forEach(p => p.classList.add('hidden'));
+
+        // Show selected
+        const panel = document.getElementById(`fx-panel-${t}`);
+        if (panel) {
+            panel.classList.remove('hidden');
+            const fxBtn = trackElements[t]?.querySelector('.fx-btn');
+            if (fxBtn) fxBtn.classList.add('active');
+            activeFxTrack = t;
+        }
+    }
+
+    // ── Build Effect Card ──────────────────────────────
     function buildEffectCard(t, color) {
+        // Create the external FX panel wrapper
+        const panel = document.createElement('div');
+        panel.classList.add('fx-panel', 'hidden');
+        panel.id = `fx-panel-${t}`;
+
+        const header = document.createElement('div');
+        header.classList.add('fx-panel-header');
+
+        const title = document.createElement('span');
+        title.classList.add('fx-panel-title');
+        title.textContent = `TRACK ${t + 1} — FX`;
+        title.style.color = color.hex;
+
+        const closeBtn = document.createElement('button');
+        closeBtn.classList.add('fx-panel-close');
+        closeBtn.innerHTML = '✕';
+        closeBtn.addEventListener('click', () => toggleFxPanel(t));
+
+        header.appendChild(title);
+        header.appendChild(closeBtn);
+        panel.appendChild(header);
+
         const card = document.createElement('div');
         card.classList.add('inline-card');
 
@@ -353,8 +405,8 @@
             card.appendChild(row);
         }
 
-        const inlinePanel = document.getElementById(`fx-panel-${t}`);
-        if (inlinePanel) inlinePanel.appendChild(card);
+        panel.appendChild(card);
+        fxPanelsContainer.appendChild(panel);
         effectCards[t] = card;
     }
 
