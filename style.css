@@ -589,32 +589,73 @@ body {
     color: var(--neon-red);
 }
 
-.inline-card {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 4px 20px;
+/* ── FX Groups Layout ── */
+.fx-groups-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
-.inline-card .effect-row {
-    margin-bottom: 0;
+.fx-group {
+    flex: 1 1 120px;
+    min-width: 100px;
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.015);
+}
+
+.fx-group-title {
+    font-family: var(--font-display);
+    font-size: 0.5rem;
+    font-weight: 700;
+    letter-spacing: 2px;
+    margin-bottom: 6px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+/* Group color themes */
+.fx-group-blue { border-color: rgba(0,212,255,0.2); }
+.fx-group-blue .fx-group-title { color: #00d4ff; }
+.fx-group-blue .slider::-webkit-slider-thumb { background: #00d4ff; }
+
+.fx-group-purple { border-color: rgba(168,85,247,0.2); }
+.fx-group-purple .fx-group-title { color: #a855f7; }
+.fx-group-purple .slider::-webkit-slider-thumb { background: #a855f7; }
+
+.fx-group-amber { border-color: rgba(245,158,11,0.25); background: rgba(245,158,11,0.03); }
+.fx-group-amber .fx-group-title { color: #f59e0b; }
+.fx-group-amber .slider::-webkit-slider-thumb { background: #f59e0b; }
+
+.fx-group-cyan { border-color: rgba(20,184,166,0.2); }
+.fx-group-cyan .fx-group-title { color: #14b8a6; }
+.fx-group-cyan .slider::-webkit-slider-thumb { background: #14b8a6; }
+
+.fx-group-green { border-color: rgba(0,255,170,0.2); }
+.fx-group-green .fx-group-title { color: #00ffaa; }
+.fx-group-green .slider::-webkit-slider-thumb { background: #00ffaa; }
+
+.fx-group .effect-row {
+    margin-bottom: 2px;
     gap: 4px;
 }
 
-.inline-card .effect-label {
+.fx-group .effect-label {
     font-size: 0.5rem;
     min-width: 34px;
 }
 
-.inline-card .effect-value {
+.fx-group .effect-value {
     font-size: 0.55rem;
     min-width: 28px;
 }
 
-.inline-card .slider {
+.fx-group .slider {
     height: 3px;
 }
 
-.inline-card .slider::-webkit-slider-thumb {
+.fx-group .slider::-webkit-slider-thumb {
     width: 10px;
     height: 10px;
 }

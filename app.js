@@ -333,6 +333,35 @@
     }
 
     // ── Build Effect Card ──────────────────────────────
+    // Groups: Mix, Filter, Envelope, Effects, Rhythm
+    const FX_GROUPS = [
+        {
+            name: 'MIX',
+            colorClass: 'fx-group-blue',
+            keys: ['volume', 'pan'],
+        },
+        {
+            name: 'FILTER',
+            colorClass: 'fx-group-purple',
+            keys: ['filterFreq', 'filterRes'],
+        },
+        {
+            name: 'ENVELOPE',
+            colorClass: 'fx-group-amber',
+            keys: ['attack', 'release'],
+        },
+        {
+            name: 'EFFECTS',
+            colorClass: 'fx-group-cyan',
+            keys: ['reverb', 'reverbDecay', 'delay', 'delayTime', 'saturation'],
+        },
+        {
+            name: 'RHYTHM',
+            colorClass: 'fx-group-green',
+            keys: ['loopLength'],
+        },
+    ];
+
     function buildEffectCard(t, color) {
         // Create the external FX panel wrapper
         const panel = document.createElement('div');
@@ -356,58 +385,73 @@
         header.appendChild(closeBtn);
         panel.appendChild(header);
 
-        const card = document.createElement('div');
-        card.classList.add('inline-card');
+        const groupsRow = document.createElement('div');
+        groupsRow.classList.add('fx-groups-row');
 
-        for (const fx of FX_DEFS) {
-            const row = document.createElement('div');
-            row.classList.add('effect-row');
+        for (const group of FX_GROUPS) {
+            const groupBox = document.createElement('div');
+            groupBox.classList.add('fx-group', group.colorClass);
 
-            const label = document.createElement('span');
-            label.classList.add('effect-label');
-            label.textContent = fx.label;
+            const groupTitle = document.createElement('div');
+            groupTitle.classList.add('fx-group-title');
+            groupTitle.textContent = group.name;
+            groupBox.appendChild(groupTitle);
 
-            const slider = document.createElement('input');
-            slider.type = 'range';
-            slider.min = fx.min;
-            slider.max = fx.max;
-            slider.step = fx.step;
-            slider.value = fx.key === 'loopLength' ? NUM_STEPS : fx.defaultVal;
-            slider.classList.add('slider', 'effect-slider', t % 2 === 0 ? 'slider-blue' : 'slider-red');
-            slider.id = `fx-${fx.key}-${t}`;
-            slider.dataset.fxKey = fx.key;
+            for (const key of group.keys) {
+                const fx = FX_DEFS.find(d => d.key === key);
+                if (!fx) continue;
 
-            const valDisplay = document.createElement('span');
-            valDisplay.classList.add('effect-value');
-            valDisplay.id = `fx-${fx.key}-val-${t}`;
-            valDisplay.dataset.fxKey = fx.key;
-            valDisplay.textContent = formatFxValue(fx.key, fx.key === 'loopLength' ? NUM_STEPS : fx.defaultVal);
+                const row = document.createElement('div');
+                row.classList.add('effect-row');
 
-            slider.addEventListener('mousedown', (e) => {
-                if (isMidiLearning) {
-                    e.preventDefault();
-                    waitingForMidiCC = { track: t, param: fx.key };
-                    document.querySelectorAll('.effect-slider').forEach(el => el.classList.remove('midi-learning-active'));
-                    slider.classList.add('midi-learning-active');
-                }
-            });
+                const label = document.createElement('span');
+                label.classList.add('effect-label');
+                label.textContent = fx.label;
 
-            slider.addEventListener('input', () => {
-                if (isMidiLearning) return;
-                const v = parseFloat(slider.value);
-                valDisplay.textContent = formatFxValue(fx.key, v);
-                applyEffect(t, fx.key, v);
-            });
+                const slider = document.createElement('input');
+                slider.type = 'range';
+                slider.min = fx.min;
+                slider.max = fx.max;
+                slider.step = fx.step;
+                slider.value = fx.key === 'loopLength' ? NUM_STEPS : fx.defaultVal;
+                slider.classList.add('slider', 'effect-slider');
+                slider.id = `fx-${fx.key}-${t}`;
+                slider.dataset.fxKey = fx.key;
 
-            row.appendChild(label);
-            row.appendChild(slider);
-            row.appendChild(valDisplay);
-            card.appendChild(row);
+                const valDisplay = document.createElement('span');
+                valDisplay.classList.add('effect-value');
+                valDisplay.id = `fx-${fx.key}-val-${t}`;
+                valDisplay.dataset.fxKey = fx.key;
+                valDisplay.textContent = formatFxValue(fx.key, fx.key === 'loopLength' ? NUM_STEPS : fx.defaultVal);
+
+                slider.addEventListener('mousedown', (e) => {
+                    if (isMidiLearning) {
+                        e.preventDefault();
+                        waitingForMidiCC = { track: t, param: fx.key };
+                        document.querySelectorAll('.effect-slider').forEach(el => el.classList.remove('midi-learning-active'));
+                        slider.classList.add('midi-learning-active');
+                    }
+                });
+
+                slider.addEventListener('input', () => {
+                    if (isMidiLearning) return;
+                    const v = parseFloat(slider.value);
+                    valDisplay.textContent = formatFxValue(fx.key, v);
+                    applyEffect(t, fx.key, v);
+                });
+
+                row.appendChild(label);
+                row.appendChild(slider);
+                row.appendChild(valDisplay);
+                groupBox.appendChild(row);
+            }
+
+            groupsRow.appendChild(groupBox);
         }
 
-        panel.appendChild(card);
+        panel.appendChild(groupsRow);
         fxPanelsContainer.appendChild(panel);
-        effectCards[t] = card;
+        effectCards[t] = groupsRow;
     }
 
     function formatFxValue(key, v) {
